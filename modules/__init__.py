@@ -1,1 +1,0 @@
-from .inference import Model, draw_bboxes
