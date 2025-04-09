@@ -1,0 +1,68 @@
+FROM nvidia/cuda:12.1.1-base-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=Etc/UTC
+ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
+ENV CUDA_HOME=/usr/local/cuda
+ENV PATH=$CUDA_HOME/bin:$PATH
+
+# 1. Установка системных зависимостей
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    wget \
+    build-essential \
+    zlib1g-dev \
+    libssl-dev \
+    libffi-dev \
+    libsqlite3-dev \
+    liblzma-dev \
+    libbz2-dev \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender1 \
+    libxkbcommon-x11-0 \
+    qt5-default \
+    && rm -rf /var/lib/apt/lists/*
+
+# 2. Установка Python 3.12 из исходников
+RUN wget https://www.python.org/ftp/python/3.12.4/Python-3.12.4.tgz \
+    && tar -xf Python-3.12.4.tgz \
+    && cd Python-3.12.4 \
+    && ./configure --enable-optimizations --with-ssl-default-suites=openssl \
+    && make -j$(nproc) \
+    && make altinstall \
+    && cd .. \
+    && rm -rf Python-3.12.4* \
+    && ln -s /usr/local/bin/python3.12 /usr/bin/python3 \
+    && ln -s /usr/local/bin/pip3.12 /usr/bin/pip \
+    && python3 -m ensurepip --upgrade
+
+# 3. Установка зависимостей для GUI
+WORKDIR /app
+COPY requirements.txt .
+
+# 4. Установка Python-пакетов с явным указанием версий
+RUN python3 -m pip install --no-cache-dir \
+    numpy==1.26.4 \
+    opencv-python==4.11.0.86 \
+    PyQt5==5.15.10 \
+    pycuda==2024.1.1 \
+    && python3 -m pip install --no-cache-dir -r requirements.txt
+
+# 5. Установка TensorRT
+RUN python3 -m pip install --no-cache-dir --pre --extra-index-url https://pypi.nvidia.com \
+    tensorrt==10.0.1 \
+    tensorrt-cuda12x==10.0.1
+
+# 6. Копирование кода
+COPY client.py .
+COPY modules/ ./modules/
+
+# 7. Настройка X11
+ENV DISPLAY=${DISPLAY}
+ENV QT_X11_NO_MITSHM=1
+ENV XAUTHORITY=/tmp/.docker.xauth
+ENV QT_DEBUG_PLUGINS=1
+
+CMD ["python3", "client.py"]

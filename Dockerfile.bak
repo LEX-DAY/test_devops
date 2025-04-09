@@ -1,0 +1,89 @@
+FROM nvidia/cuda:12.2.0-devel-ubuntu22.04
+
+# 1. Установка системных зависимостей
+RUN apt-get update && apt-get install -y \
+    wget \
+    tar \
+    build-essential \
+    zlib1g-dev \
+    libncurses5-dev \
+    libgdbm-dev \
+    libnss3-dev \
+    libssl-dev \
+    libreadline-dev \
+    libffi-dev \
+    libsqlite3-dev \
+    libbz2-dev \
+    liblzma-dev \
+    libgl1 \
+    python3-dev \
+    python3-pip \
+    pkg-config \
+    libboost-all-dev \
+    ocl-icd-opencl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# 2. Установка Python 3.12.9
+RUN wget -q https://www.python.org/ftp/python/3.12.9/Python-3.12.9.tgz \
+    && tar -xf Python-3.12.9.tgz \
+    && cd Python-3.12.9 \
+    && ./configure --enable-optimizations --enable-shared \
+    && make -j$(nproc) \
+    && make altinstall \
+    && cd .. \
+    && rm -rf Python-3.12.9* \
+    && ldconfig \
+    && update-alternatives --install /usr/bin/python3 python3 /usr/local/bin/python3.12 1 \
+    && update-alternatives --install /usr/bin/pip pip /usr/local/bin/pip3.12 1
+
+# 3. Установка зависимостей Python
+COPY requirements.txt .
+RUN python3 -m pip install --upgrade pip setuptools wheel \
+    && python3 -m pip install "numpy==1.26.4" \
+    && python3 -m pip install --pre --extra-index-url https://pypi.ngc.nvidia.com \
+        "tensorrt==10.8.0.43" \
+        "tensorrt_cu12==10.8.0.43" \
+        "tensorrt_cu12_bindings==10.8.0.43" \
+        "tensorrt_cu12_libs==10.8.0.43" \
+        --default-timeout=100 \
+    && python3 -m pip install "opencv-python==4.11.0.86"
+
+# 4. Установка PyCUDA с явным указанием пути к CUDA
+RUN python3 -m pip install "pycuda>=2021.1" --no-binary pycuda \
+    || (git clone --recursive https://github.com/inducer/pycuda.git /tmp/pycuda \
+        && cd /tmp/pycuda \
+        && echo "import sys; from setuptools import find_packages; print(find_packages())" > temp_setup.py \
+        && python3 configure.py --cuda-root=/usr/local/cuda \
+        && python3 -m pip install . \
+        && rm -rf /tmp/pycuda)
+
+# 5. Настройка переменных окружения для CUDA
+ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/local/nvidia/lib64:/usr/local/nvidia/lib:$LD_LIBRARY_PATH
+ENV PATH=/usr/local/nvidia/bin:/usr/local/cuda/bin:$PATH
+
+# 6. Проверка наличия CUDA библиотек
+RUN ldconfig -p | grep libcuda || echo "libcuda not found" \
+    && ls -la /usr/local/cuda/lib64/libcuda* || echo "CUDA libraries not found"
+
+# 7. Установка остальных зависимостей
+RUN python3 -m pip install -r requirements.txt --ignore-installed \
+    && python3 -m pip cache purge
+
+# 8. Проверка установки
+RUN python3 -c "import numpy; print(f'NumPy: {numpy.__version__}')" \
+    && python3 -c "import cv2; print(f'OpenCV: {cv2.__version__}')" \
+    && python3 -c "import tensorrt as trt; print(f'TensorRT: {trt.__version__}')" \
+    && python3 -c "import pycuda.driver as cuda; print('PyCUDA imported successfully')" \
+    && python3 -c "import pycuda.driver as cuda; cuda.init(); print('PyCUDA initialized')"
+
+# 9. Копирование проекта
+COPY model/ /app/model/
+COPY modules/ /app/modules/
+COPY test_img/ /app/test_img/
+COPY main.py /app/
+
+# 10. Настройка окружения
+ENV PYTHONPATH=/app
+WORKDIR /app
+
+CMD ["python3", "main.py"]
